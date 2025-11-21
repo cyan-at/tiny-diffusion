@@ -13,6 +13,17 @@ import numpy as np
 import datasets
 from positional_embeddings import PositionalEmbedding
 
+print(torch.cuda.is_available())
+print(torch.cuda.device_count())
+
+default_device = torch.get_default_device()
+print(f"Initial default device: {default_device}")
+
+# import ipdb; ipdb.set_trace()
+# torch.set_default_device("NVIDIA GeForce RTX 5080")
+torch.set_default_device("cuda")
+
+device = torch.device("cuda")
 
 class Block(nn.Module):
     def __init__(self, size: int):
@@ -33,6 +44,10 @@ class MLP(nn.Module):
         self.time_mlp = PositionalEmbedding(emb_size, time_emb)
         self.input_mlp1 = PositionalEmbedding(emb_size, input_emb, scale=25.0)
         self.input_mlp2 = PositionalEmbedding(emb_size, input_emb, scale=25.0)
+        
+        self.time_mlp = self.time_mlp.cuda()
+        self.input_mlp1 = self.input_mlp1.cuda()
+        self.input_mlp2 = self.input_mlp2.cuda()
 
         concat_size = len(self.time_mlp.layer) + \
             len(self.input_mlp1.layer) + len(self.input_mlp2.layer)
@@ -43,9 +58,13 @@ class MLP(nn.Module):
         self.joint_mlp = nn.Sequential(*layers)
 
     def forward(self, x, t):
+        # import ipdb; ipdb.set_trace()
         x1_emb = self.input_mlp1(x[:, 0])
         x2_emb = self.input_mlp2(x[:, 1])
-        t_emb = self.time_mlp(t)
+        try:
+            t_emb = self.time_mlp(t)
+        except:
+            import ipdb; ipdb.set_trace()
         x = torch.cat((x1_emb, x2_emb, t_emb), dim=-1)
         x = self.joint_mlp(x)
         return x
@@ -61,13 +80,13 @@ class NoiseScheduler():
         self.num_timesteps = num_timesteps
         if beta_schedule == "linear":
             self.betas = torch.linspace(
-                beta_start, beta_end, num_timesteps, dtype=torch.float32)
+                beta_start, beta_end, num_timesteps, dtype=torch.float32, device='cuda')
         elif beta_schedule == "quadratic":
             self.betas = torch.linspace(
-                beta_start ** 0.5, beta_end ** 0.5, num_timesteps, dtype=torch.float32) ** 2
+                beta_start ** 0.5, beta_end ** 0.5, num_timesteps, dtype=torch.float32, device='cuda') ** 2
 
         self.alphas = 1.0 - self.betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, axis=0)
+        self.alphas_cumprod = torch.cumprod(self.alphas, axis=0,)
         self.alphas_cumprod_prev = F.pad(
             self.alphas_cumprod[:-1], (1, 0), value=1.)
 
@@ -128,6 +147,8 @@ class NoiseScheduler():
         s1 = s1.reshape(-1, 1)
         s2 = s2.reshape(-1, 1)
 
+        # import ipdb; ipdb.set_trace()
+
         return s1 * x_start + s2 * x_noise
 
     def __len__(self):
@@ -154,7 +175,7 @@ if __name__ == "__main__":
 
     dataset = datasets.get_dataset(config.dataset)
     dataloader = DataLoader(
-        dataset, batch_size=config.train_batch_size, shuffle=True, drop_last=True)
+        dataset, batch_size=config.train_batch_size, shuffle=True, drop_last=True, generator=torch.Generator(device='cuda'))
 
     model = MLP(
         hidden_size=config.hidden_size,
@@ -162,10 +183,12 @@ if __name__ == "__main__":
         emb_size=config.embedding_size,
         time_emb=config.time_embedding,
         input_emb=config.input_embedding)
+    model = model.cuda()
 
     noise_scheduler = NoiseScheduler(
         num_timesteps=config.num_timesteps,
         beta_schedule=config.beta_schedule)
+    # noise_scheduler = noise_scheduler.cuda()
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -175,13 +198,14 @@ if __name__ == "__main__":
     global_step = 0
     frames = []
     losses = []
+    device = torch.device('cuda')
     print("Training model...")
     for epoch in range(config.num_epochs):
         model.train()
         progress_bar = tqdm(total=len(dataloader))
         progress_bar.set_description(f"Epoch {epoch}")
         for step, batch in enumerate(dataloader):
-            batch = batch[0]
+            batch = batch[0].to(device)
             noise = torch.randn(batch.shape)
             timesteps = torch.randint(
                 0, noise_scheduler.num_timesteps, (batch.shape[0],)
@@ -202,6 +226,7 @@ if __name__ == "__main__":
             progress_bar.set_postfix(**logs)
             global_step += 1
         progress_bar.close()
+        print("done")
 
         if epoch % config.save_images_step == 0 or epoch == config.num_epochs - 1:
             # generate data with the model to later visualize the learning process
@@ -209,11 +234,12 @@ if __name__ == "__main__":
             sample = torch.randn(config.eval_batch_size, 2)
             timesteps = list(range(len(noise_scheduler)))[::-1]
             for i, t in enumerate(tqdm(timesteps)):
-                t = torch.from_numpy(np.repeat(t, config.eval_batch_size)).long()
+                t = torch.from_numpy(np.repeat(t, config.eval_batch_size)).long().cuda()
+                # import ipdb; ipdb.set_trace()
                 with torch.no_grad():
                     residual = model(sample, t)
                 sample = noise_scheduler.step(residual, t[0], sample)
-            frames.append(sample.numpy())
+            frames.append(sample.cpu().numpy())
 
     print("Saving model...")
     outdir = f"exps/{config.experiment_name}"

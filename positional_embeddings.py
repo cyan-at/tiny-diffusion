@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+device = torch.device('cuda')
 
 class SinusoidalEmbedding(nn.Module):
     def __init__(self, size: int, scale: float = 1.0):
@@ -12,12 +13,16 @@ class SinusoidalEmbedding(nn.Module):
         self.scale = scale
 
     def forward(self, x: torch.Tensor):
+        # import ipdb; ipdb.set_trace()
+
         x = x * self.scale
         half_size = self.size // 2
-        emb = torch.log(torch.Tensor([10000.0])) / (half_size - 1)
+        emb = torch.log(torch.Tensor([10000.0]).cuda()) / (half_size - 1)
         emb = torch.exp(-emb * torch.arange(half_size))
         emb = x.unsqueeze(-1) * emb.unsqueeze(0)
         emb = torch.cat((torch.sin(emb), torch.cos(emb)), dim=-1)
+        emb = emb.to(device)
+
         return emb
 
     def __len__(self):
@@ -78,17 +83,18 @@ class PositionalEmbedding(nn.Module):
         super().__init__()
 
         if type == "sinusoidal":
-            self.layer = SinusoidalEmbedding(size, **kwargs)
+            self.layer = SinusoidalEmbedding(size, **kwargs).cuda()
         elif type == "linear":
-            self.layer = LinearEmbedding(size, **kwargs)
+            self.layer = LinearEmbedding(size, **kwargs).cuda()
         elif type == "learnable":
-            self.layer = LearnableEmbedding(size)
+            self.layer = LearnableEmbedding(size).cuda()
         elif type == "zero":
-            self.layer = ZeroEmbedding()
+            self.layer = ZeroEmbedding().cuda()
         elif type == "identity":
-            self.layer = IdentityEmbedding()
+            self.layer = IdentityEmbedding().cuda()
         else:
             raise ValueError(f"Unknown positional embedding type: {type}")
 
     def forward(self, x: torch.Tensor):
+        # import ipdb; ipdb.set_trace()
         return self.layer(x)
